@@ -6,7 +6,10 @@ import time
 import random
 
 # --- Constants ---
-STOCKFISH_PATH = "stockfish/stockfish.exe" # User needs to place stockfish here
+if os.name == 'nt':
+    STOCKFISH_PATH = "stockfish/stockfish.exe"
+else:
+    STOCKFISH_PATH = "stockfish/stockfish"
 
 # Piece-Square Tables (simplified for basic AI)
 PAWN_TABLE = [
@@ -137,6 +140,7 @@ class ChessGame:
         
         self.ai_enabled = False
         self.bot_vs_stockfish = False
+        self.bot_vs_bot = False
         self.error_message = ""
 
     def clear_screen(self):
@@ -144,24 +148,100 @@ class ChessGame:
 
     def display_board(self):
         self.clear_screen()
-        print("\n" + self.board.unicode(borders=True))
-        print(f"\nTurn: {'White' if self.board.turn == chess.WHITE else 'Black'}")
+        last_move = self.board.peek() if self.board.move_stack else None
+        
+        # Colors (Modern Balanced)
+        LIGHT_SQ = "\033[48;5;252m" # Silver/Light Grey
+        DARK_SQ  = "\033[48;5;240m" # Slate/Dark Grey
+        MOVE_SQ  = "\033[48;5;221m" # Muted Yellow
+        RESET    = "\033[0m"
+        
+        # Piece Colors
+        WHITE_P  = "\033[38;5;231m\033[1m" # Pure White Bold
+        BLACK_P  = "\033[38;5;16m\033[1m"  # Pure Black Bold
+        
+        INFO_COLOR = "\033[38;5;141m"
+        CMD_COLOR  = "\033[38;5;244m"
+
+        # 3x6 Proportional Pieces (Clean & Bold)
+        PIECES = {
+            chess.PAWN:   ["      ", "  ▄█▄ ", "      "],
+            chess.KNIGHT: ["  ▄██ ", "   ██ ", "  ███ "],
+            chess.BISHOP: ["   █  ", "  ███ ", "   █  "],
+            chess.ROOK:   ["  █ █ ", "  ███ ", "  ███ "],
+            chess.QUEEN:  ["  █▄█ ", "  ███ ", "  ███ "],
+            chess.KING:   ["  ▄█▄ ", "  ███ ", "  ▄█▄ "]
+        }
+        
+        # Borders (Clean Single Line)
+        top_border = "     ┌" + "──────┬" * 7 + "──────┐"
+        mid_border = "     ├" + "──────┼" * 7 + "──────┤"
+        bot_border = "     └" + "──────┴" * 7 + "──────┘"
+
+        print(f"\n        a      b      c      d      e      f      g      h")
+        print(top_border)
+        
+        for rank in range(8, 0, -1):
+            for sub_row in range(3):
+                if sub_row == 1:
+                    line = f"  {rank}  │"
+                else:
+                    line = "     │"
+                
+                for file in range(1, 9):
+                    sq = chess.square(file-1, rank-1)
+                    piece = self.board.piece_at(sq)
+                    is_move = last_move and (sq == last_move.from_square or sq == last_move.to_square)
+                    bg = MOVE_SQ if is_move else (LIGHT_SQ if (rank + file) % 2 == 0 else DARK_SQ)
+                    
+                    if piece:
+                        p_col = WHITE_P if piece.color == chess.WHITE else BLACK_P
+                        pattern = PIECES[piece.piece_type][sub_row]
+                        line += f"{bg}{p_col}{pattern}{RESET}│"
+                    else:
+                        line += f"{bg}      {RESET}│"
+                
+                if sub_row == 1:
+                    print(line + f"  {rank}")
+                else:
+                    print(line)
+
+            if rank > 1:
+                print(mid_border)
+            else:
+                print(bot_border)
+        
+        print("        a      b      c      d      e      f      g      h")
+
+        # Game Info
+        turn_text = f"{'White' if self.board.turn == chess.WHITE else 'Black'}"
+        print(f"\n   TURN: {INFO_COLOR}{turn_text}{RESET}", end=" | ")
         if self.board.is_check():
-            print("--- CHECK! ---")
+            print("\033[1;31m--- CHECK! ---\033[0m", end=" | ")
+        
+        # Last move info
+        if last_move:
+            # san() requires the move to be legal in the current board state.
+            # Since last_move is already pushed, we pop it, get the SAN, and push it back.
+            move = self.board.pop()
+            san_str = self.board.san(move)
+            self.board.push(move)
+            print(f"Last Move: {san_str}", end="")
+        print()
+
         if self.error_message:
-            print(f"Error: {self.error_message}")
+            print(f"\n   \033[1;31mError: {self.error_message}\033[0m")
             self.error_message = ""
         
-        print("\nControls:")
-        print("  - Enter move (e.g., e2e4, Nf3)")
-        print("  - 'u' to undo move")
-        print("  - 'r' to reset board")
-        print("  - 'a' to toggle Basic AI (Black)")
-        print("  - 'v' to toggle Bot (White) vs Stockfish (Black)")
-        print("  - 'q' to quit")
-        print(f"\nBasic AI: {'ON' if self.ai_enabled else 'OFF'}")
-        print(f"Stockfish Battle: {'ON' if self.bot_vs_stockfish else 'OFF'}")
-        print(f"Stockfish Found: {'Yes' if self.stockfish.engine else 'No'}")
+        print(f"\n   {CMD_COLOR}Controls:{RESET}")
+        print(f"   {CMD_COLOR}- Move: e2e4, Nf3{RESET}      {CMD_COLOR}- 'u': Undo{RESET}      {CMD_COLOR}- 'r': Reset{RESET}      {CMD_COLOR}- 'q': Quit{RESET}")
+        print(f"   {CMD_COLOR}- 'a': Basic AI (B){RESET}  {CMD_COLOR}- 'b': Bot vs Bot{RESET}  {CMD_COLOR}- 'v': Bot vs Stockfish{RESET}")
+        
+        status_line = f"\n   AI: {'\033[1;32mON\033[0m' if self.ai_enabled else 'OFF'} | "
+        status_line += f"Bot vs Bot: {'\033[1;32mON\033[0m' if self.bot_vs_bot else 'OFF'} | "
+        status_line += f"Stockfish Battle: {'\033[1;32mON\033[0m' if self.bot_vs_stockfish else 'OFF'} | "
+        status_line += f"Stockfish Engine: {'\033[1;32mFound\033[0m' if self.stockfish.engine else 'Not Found'}"
+        print(status_line)
 
     def handle_input(self, user_input):
         user_input = user_input.strip().lower()
@@ -174,17 +254,23 @@ class ChessGame:
             if len(self.board.move_stack) > 0:
                 self.board.pop()
                 # If AI was playing, pop its move too
-                if (self.ai_enabled or self.bot_vs_stockfish) and len(self.board.move_stack) > 0:
+                if (self.ai_enabled or self.bot_vs_stockfish or self.bot_vs_bot) and len(self.board.move_stack) > 0:
                     self.board.pop()
         elif user_input == 'r':
             self.board.reset()
         elif user_input == 'a':
             self.ai_enabled = not self.ai_enabled
             self.bot_vs_stockfish = False
+            self.bot_vs_bot = False
+        elif user_input == 'b':
+            self.bot_vs_bot = not self.bot_vs_bot
+            self.ai_enabled = False
+            self.bot_vs_stockfish = False
         elif user_input == 'v':
             if self.stockfish.engine:
                 self.bot_vs_stockfish = not self.bot_vs_stockfish
                 self.ai_enabled = False
+                self.bot_vs_bot = False
             else:
                 self.error_message = "Stockfish engine not found!"
         else:
@@ -214,17 +300,25 @@ class ChessGame:
                 self.board.reset()
                 continue
 
+            if self.bot_vs_bot:
+                move = self.ai.get_best_move(self.board)
+                if move:
+                    print(f"\nBot plays: {self.board.san(move)}")
+                    self.board.push(move)
+                    time.sleep(1.0) # Pace for humans to follow
+                continue
+
             if self.bot_vs_stockfish:
                 if self.board.turn == chess.WHITE:
                     move = self.ai.get_best_move(self.board)
-                    print(f"Basic AI plays: {self.board.san(move)}")
+                    print(f"\nBasic AI plays: {self.board.san(move)}")
                 else:
                     move = self.stockfish.get_best_move(self.board)
-                    print(f"Stockfish plays: {self.board.san(move)}")
+                    print(f"\nStockfish plays: {self.board.san(move)}")
                 
                 if move:
                     self.board.push(move)
-                    time.sleep(1) # Delay to watch the game
+                    time.sleep(1.0) # Pace for humans to follow
                 continue
 
             if self.ai_enabled and self.board.turn == chess.BLACK:
